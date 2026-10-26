@@ -69,7 +69,54 @@ def test_lineage_and_trimmed_names(con, raw_dir):
     consolidate(con, raw_dir)
 
     assert rows(con, "SELECT deposit, source_key, batch FROM scans WHERE capture_id = 'a1'") == [
-        ("copper", f"{LEGACY}/scans_batch001.parquet", 1)
+        ("Copper", f"{LEGACY}/scans_batch001.parquet", 1)
+    ]
+
+
+def test_names_are_normalised(con, raw_dir, tmp_path):
+    write_raw(
+        raw_dir,
+        {
+            f"{CURRENT}/scans_batch002.parquet": """
+                SELECT * FROM (VALUES
+                    ('s2', 'u1', 'Mort13', 'RR', '2026-06-24T09:10:00.000Z', 'b2', 'c3', 'Nyx',
+                     'Glacium Ring', 'People''s Service Station Alpha', 'none', 'aluminium',
+                     500::INTEGER, 1::INTEGER, 1.0, 1.0),
+                    ('s2', 'u1', 'Mort13', 'RR', '2026-06-24T09:11:00.000Z', 'b3', 'c4', 'Nyx',
+                     'Keeger Ring', 'NONE', 'none', 'none', 500::INTEGER, 1::INTEGER, 1.0, 1.0)
+                ) t(session_id, user_id, user_name, org, "timestamp", capture_id, cluster_id,
+                    system, gravity_well, region, place, deposit, mass, resistance, instability,
+                    volume)
+            """,
+            f"{CURRENT}/compositions_batch002.parquet": """
+                SELECT * FROM (VALUES
+                    ('b2', 0::INTEGER, 'aluminium', 60.0, 500::INTEGER, 0.6, 1.0),
+                    ('b2', 1::INTEGER, 'corunum', 10.0, 400::INTEGER, 0.1, 1.0),
+                    ('b2', 2::INTEGER, 'INERT MATERIALS', 30.0, 0::INTEGER, 0.3, 1.0)
+                ) t(capture_id, mat_index, type, amount, quality, material_volume, min_confidence)
+            """,
+        },
+        tmp_path / "fixtures",
+    )
+
+    consolidate(con, raw_dir)
+
+    assert rows(
+        con,
+        "SELECT capture_id, gravity_well, region, place, deposit FROM scans "
+        "WHERE capture_id LIKE 'b%' ORDER BY 1",
+    ) == [
+        ("b1", "Keeger Ring", "PSS Theta", None, "Taranite"),
+        ("b2", "Glaciem Ring", "PSS Alpha", None, "Aluminum"),
+        ("b3", "Keeger Ring", None, None, None),
+    ]
+    assert rows(con, "SELECT DISTINCT type FROM compositions ORDER BY 1") == [
+        ("Aluminum",),
+        ("Copper",),
+        ("Corundum",),
+        ("Inert Materials",),
+        ("Quantanium",),
+        ("Taranite",),
     ]
 
 
@@ -148,14 +195,14 @@ def test_rebuild_is_idempotent(con, raw_dir):
     assert first == second
 
 
-def test_aliases_fix_spelling(con, raw_dir, monkeypatch):
-    monkeypatch.setattr(consolidate_module, "DEPOSIT_ALIASES", {"copper": "Copper"})
+def test_aliases_win_over_capitalisation(con, raw_dir, monkeypatch):
+    monkeypatch.setattr(consolidate_module, "DEPOSIT_ALIASES", {"Copper": "Cuprum"})
     monkeypatch.setattr(consolidate_module, "MINERAL_ALIASES", {"inert materials": "Inert"})
 
     consolidate(con, raw_dir)
 
     assert rows(con, "SELECT DISTINCT deposit FROM scans ORDER BY 1") == [
-        ("Copper",),
+        ("Cuprum",),
         ("Quantanium",),
         ("Taranite",),
     ]

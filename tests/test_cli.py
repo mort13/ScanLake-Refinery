@@ -1,6 +1,6 @@
 import httpx
 import pytest
-from conftest import API_KEY
+from conftest import API_KEY, USER
 
 from scanlake_refinery import cli
 from scanlake_refinery.gateway import GatewayClient
@@ -27,12 +27,19 @@ def env(monkeypatch, tmp_path, gateway):
 def test_run_end_to_end(env, gateway, capsys):
     assert cli.main(["run"]) == 0
 
-    assert sorted(gateway.derived) == [
+    derived = sorted(gateway.derived)
+    assert [k for k in derived if not k.startswith(("results/", "monthly/"))] == [
         "consolidated/compositions.parquet",
         "consolidated/confidences.parquet",
         "consolidated/scans.parquet",
         "manifest.json",
-        "results/scan_counts.parquet",
+    ]
+    assert "results/deposit_materials.parquet" in derived
+    # Both fixture months (March and June 2026) are closed by now.
+    assert [k for k in derived if k.startswith("monthly/")] == [
+        f"monthly/2026/{month}/{USER}/{table}.parquet"
+        for month in ("03", "06")
+        for table in ("compositions", "confidences", "scans")
     ]
 
     assert cli.main(["status"]) == 0

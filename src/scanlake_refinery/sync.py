@@ -20,8 +20,8 @@ log = logging.getLogger(__name__)
 
 # YYYY/MM/DD/<userId>/<sessionId>/<file>.parquet, as written by ScanLake Store. Segments may not
 # start with a dot, which rules out "." and ".." path traversal into the local mirror.
-_SEGMENT = r"[A-Za-z0-9_-][A-Za-z0-9_.-]*"
-RAW_KEY_RE = re.compile(rf"^\d{{4}}/\d{{2}}/\d{{2}}/{_SEGMENT}/{_SEGMENT}/{_SEGMENT}\.parquet$")
+SEGMENT = r"[A-Za-z0-9_-][A-Za-z0-9_.-]*"
+RAW_KEY_RE = re.compile(rf"^\d{{4}}/\d{{2}}/\d{{2}}/{SEGMENT}/{SEGMENT}/{SEGMENT}\.parquet$")
 
 
 @dataclass

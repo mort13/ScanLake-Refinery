@@ -7,12 +7,17 @@ Rebuilt from scratch on every run. Handles the schema drift in the bucket:
     the Store's migrate_confidences.py, and are excluded;
   - `timestamp` is an ISO string, with or without milliseconds / "Z", and becomes TIMESTAMPTZ (UTC).
 Rows are deduplicated per capture: the most recently uploaded file wins.
+
+Names are normalised after the rebuild: deposit and mineral names are capitalised word by word
+("iron" -> "Iron"), known variants are mapped through the *_ALIASES tables, and Capture's "none"
+placeholder for an unset deposit, region or place becomes NULL.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+import string
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -62,12 +67,17 @@ LINEAGE_COLUMNS = [
     ("batch", "INTEGER"),
     ("uploaded_at", "TIMESTAMPTZ"),
 ]
-NAME_COLUMNS = {"deposit", "type"}
+NAME_COLUMNS = {"system", "gravity_well", "region", "place", "deposit", "type"}
 
-# Spelling fixes for deposit and mineral names, keyed by lower-cased name. Applied after the
-# rebuild; filled in together with the calculations.
-DEPOSIT_ALIASES: dict[str, str] = {}
-MINERAL_ALIASES: dict[str, str] = {}
+# Spelling fixes, keyed by lower-cased name and applied after the rebuild. Deposit and mineral
+# names are capitalised first, so only real variants and typos need an entry. Capture itself uses
+# both "Aluminum" (deposits) and "Aluminium" (minerals); the Refinery settles on one spelling.
+DEPOSIT_ALIASES: dict[str, str] = {"aluminium": "Aluminum"}
+MINERAL_ALIASES: dict[str, str] = {"aluminium": "Aluminum", "corunum": "Corundum"}
+GRAVITY_WELL_ALIASES: dict[str, str] = {"glacium ring": "Glaciem Ring"}
+REGION_ALIASES: dict[str, str] = {"people's service station alpha": "PSS Alpha"}
+# Columns where Capture writes "none" for "not set".
+UNSET_IS_NONE = [("scans", "deposit"), ("scans", "region"), ("scans", "place")]
 
 LATEST_FIRST = "uploaded_at DESC NULLS LAST, upload_date DESC, batch DESC, source_key DESC"
 
@@ -156,8 +166,7 @@ def consolidate(con: duckdb.DuckDBPyConnection, raw_dir: Path) -> dict:
             + _latest_per_capture(conf_files + inline_conf, CONFIDENCE_COLUMNS, schemas)
             + " ORDER BY capture_id"
         )
-        _apply_aliases(con, "scans", "deposit", DEPOSIT_ALIASES)
-        _apply_aliases(con, "compositions", "type", MINERAL_ALIASES)
+        _normalise_names(con)
         con.execute("COMMIT")
     except BaseException:
         con.execute("ROLLBACK")
@@ -246,14 +255,37 @@ def _latest_file_per_capture(files: list[RawFile], columns: list, schemas: dict)
     )
 
 
+def _normalise_names(con: duckdb.DuckDBPyConnection) -> None:
+    for table, column in UNSET_IS_NONE:
+        con.execute(f"UPDATE {table} SET {_q(column)} = NULL WHERE lower({_q(column)}) = 'none'")
+    _apply_aliases(con, "scans", "deposit", _capitalised(con, "scans", "deposit"), DEPOSIT_ALIASES)
+    _apply_aliases(
+        con, "compositions", "type", _capitalised(con, "compositions", "type"), MINERAL_ALIASES
+    )
+    _apply_aliases(con, "scans", "gravity_well", GRAVITY_WELL_ALIASES)
+    _apply_aliases(con, "scans", "region", REGION_ALIASES)
+
+
+def _capitalised(con: duckdb.DuckDBPyConnection, table: str, column: str) -> dict[str, str]:
+    """Map every lower-cased value of `column` to its word-wise capitalised form."""
+    names = con.execute(
+        f"SELECT DISTINCT lower({_q(column)}) FROM {table} WHERE {_q(column)} IS NOT NULL"
+    ).fetchall()
+    return {name: string.capwords(name) for (name,) in names}
+
+
 def _apply_aliases(
-    con: duckdb.DuckDBPyConnection, table: str, column: str, aliases: dict[str, str]
+    con: duckdb.DuckDBPyConnection, table: str, column: str, *alias_maps: dict[str, str]
 ) -> None:
+    """Rename case-insensitively; later maps win over earlier ones."""
+    aliases: dict[str, str] = {}
+    for m in alias_maps:
+        aliases.update({alias.lower(): canonical for alias, canonical in m.items()})
     if not aliases:
         return
     con.executemany(
-        f"UPDATE {table} SET {_q(column)} = ? WHERE lower({_q(column)}) = ?",
-        [[canonical, alias.lower()] for alias, canonical in aliases.items()],
+        f"UPDATE {table} SET {_q(column)} = ? WHERE lower({_q(column)}) = ? AND {_q(column)} <> ?",
+        [[canonical, alias, canonical] for alias, canonical in aliases.items()],
     )
 
 

@@ -28,9 +28,9 @@ Workstation ── ssh / git push (LAN) ──▶ LXC
 | Step | What it does |
 |---|---|
 | `sync` | Lists `GET /api/files` (cursor paging) and downloads only keys matching `YYYY/MM/DD/<user>/<session>/<file>.parquet` that are new or whose `etag/size/uploaded` changed. Skips `public/` and `manifest.json`. Never deletes local files: objects that vanish from the bucket are flagged `deleted_remote` and kept as an archive. |
-| `consolidate` | Rebuilds the three tables from the whole mirror (seconds at the current size). It unions schemas by name, casts `mass`/`resistance` to INTEGER and `timestamp` to TIMESTAMPTZ (UTC), and moves the pre-April-2026 inline `*_conf` columns into `confidences`. It drops the legacy `(capture_id, min_confidence)` confidences files and files deleted in the bucket. When a capture appears more than once, the newest upload wins. Every row carries `source_key`, `upload_date`, `batch` and `uploaded_at`. |
+| `consolidate` | Rebuilds the three tables from the whole mirror (seconds at the current size). It unions schemas by name, casts `mass`/`resistance` to INTEGER and `timestamp` to TIMESTAMPTZ (UTC), and moves the pre-April-2026 inline `*_conf` columns into `confidences`. It drops the legacy `(capture_id, min_confidence)` confidences files and files deleted in the bucket. When a capture appears more than once, the newest upload wins. Every row carries `source_key`, `upload_date`, `batch` and `uploaded_at`. Names are then normalised: deposit and mineral names are capitalised (`iron` → `Iron`), variants go through the `*_ALIASES` tables, and Capture's `none` for an unset deposit, region or place becomes NULL. |
 | `compute` | Runs every job in `src/scanlake_refinery/jobs/` into `results_<name>`. |
-| `publish` | Exports `out/consolidated/*.parquet`, `out/results/*.parquet` (ZSTD) and `out/manifest.json`. It uploads only files whose sha256 changed, and the manifest last. |
+| `publish` | Exports `out/consolidated/*.parquet`, `out/results/*.parquet`, `out/monthly/**/*.parquet` (ZSTD) and `out/manifest.json`, and deletes files in `out/` that are no longer produced. It uploads only files whose sha256 changed, and the manifest last. |
 
 Data directory (`REFINERY_DATA_DIR`, on the server `/var/lib/scanlake-refinery`):
 
@@ -45,7 +45,40 @@ Derived bucket layout, readable through `GET /api/derived/<key>`:
 ```
 consolidated/scans.parquet  consolidated/compositions.parquet  consolidated/confidences.parquet
 results/<job>.parquet
+monthly/YYYY/MM/<userId>/{scans,compositions,confidences}.parquet
 manifest.json      run_id, generated_at, revision, and rows/bytes/sha256 per file
+```
+
+`monthly/` holds the consolidated rows of every closed month (every month before the current UTC
+month), one file per user and table. Rows are split by the month folder and user folder of their
+raw file (`source_key`), so the files mirror the raw layout without the day and session levels.
+They are rebuilt on every run and uploaded only when they change, so a month's files appear on
+the first run after it ends. The raw bucket is left as it is.
+
+### Results
+
+`results/<job>.parquet` in the derived bucket, `results_<job>` in the warehouse. A location is
+`system` + `gravity_well` (planet, moon, ring or belt); the `_by_region` variants add `region`
+(NULL = not recorded). Timestamps are when a scan was saved in Capture, so pace is measured
+between saves of one session; gaps over 10 minutes count as breaks and are left out.
+
+| Job | One row per | Columns |
+|---|---|---|
+| `deposit_materials`, `deposit_materials_by_region` | location × deposit × material | `location_scans`; `deposit_scans`, `deposit_share_pct` (of the location's rocks), `deposit_clusters`, `deposit_avg_mass`, `deposit_total_mass`, `deposit_last_scan_at`; `composition_scans` (deposit rocks with a composition), `material_scans`, `presence_pct`, `avg_share_pct` (mean % of the rock, absent = 0; sums to 100 per deposit), `avg_share_when_present_pct`, `total_material_mass`; `quality_avg`, `quality_weighted_avg` (by material mass), `quality_min`/`_p25`/`_median`/`_p75`/`_max` |
+| `location_stats`, `location_stats_by_region` | location | `scans`, `clusters`, `sessions`, `users`, `deposits`, `total_mass`, `avg_mass`, `first_scan_at`, `last_scan_at`, `gaps_counted`, `avg_gap_seconds`, `median_gap_seconds` |
+| `user_stats` | user name (case-insensitive) | `user_ids`, `sessions`, `scans`, `clusters`, `total_mass`, `biggest_scan_mass`, `most_scans_in_session`, `best_session_avg_gap_seconds` (sessions with ≥ 30 scans), `avg_gap_seconds`, `first_scan_at`, `last_scan_at` |
+| `highscores` | category × rank | `user_name`, `value`, `unit`, `session_id`, `capture_id`, `achieved_at`, `detail`; categories `fastest_session_avg_scan_time` (≥ 30 scans, lower wins), `biggest_scan`, `most_scans_in_session`, `most_scans_total`; top 10, each user's best entry only, ties go to the earlier one |
+| `scan_counts` | day × location × deposit | `rocks`, `clusters`, `sessions`, `total_mass` |
+
+A rock can list the same mineral twice; shares and presence add those entries up, quality
+statistics use each entry. Quality is NULL for `Inert Materials` and for values outside 0–1000.
+Example:
+
+```sql
+SELECT deposit, deposit_share_pct, material, avg_share_pct, quality_median
+FROM 'results/deposit_materials.parquet'
+WHERE gravity_well = 'Bloom'
+ORDER BY deposit_share_pct DESC, avg_share_pct DESC;
 ```
 
 ### Adding a result job
@@ -61,8 +94,9 @@ def deposit_masses(con) -> str:
 ```
 
 It is picked up automatically, stored as `results_deposit_masses` and published as
-`results/deposit_masses.parquet`. Spelling fixes for deposit and mineral names go into
-`DEPOSIT_ALIASES` / `MINERAL_ALIASES` in `consolidate.py`.
+`results/deposit_masses.parquet`. Shared SQL (scan gaps, rock materials, user grouping, the pause
+threshold) is in `jobs/_shared.py`. Spelling fixes go into `DEPOSIT_ALIASES`, `MINERAL_ALIASES`,
+`GRAVITY_WELL_ALIASES` and `REGION_ALIASES` in `consolidate.py`.
 
 ## Local development (Windows)
 
