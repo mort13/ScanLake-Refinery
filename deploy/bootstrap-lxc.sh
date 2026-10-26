@@ -77,7 +77,7 @@ fi
 if ! id "$ADMIN" &>/dev/null; then
     useradd --create-home --shell /bin/bash "$ADMIN"
 fi
-usermod -aG sudo "$ADMIN"
+usermod -aG sudo,systemd-journal "$ADMIN"
 install -d -m 0700 -o "$ADMIN" -g "$ADMIN" "/home/$ADMIN/.ssh"
 if [[ ! -s /home/$ADMIN/.ssh/authorized_keys ]]; then
     [[ -s /root/.ssh/authorized_keys ]] \
