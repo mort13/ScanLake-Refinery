@@ -10,3 +10,11 @@ build/
 .env
 data/
 *.part
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+id_ecdsa*
+rclone.conf
