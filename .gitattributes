@@ -1,0 +1,3 @@
+# LF everywhere: deploy/ is copied from Windows straight onto the Linux server.
+* text=auto eol=lf
+*.parquet binary

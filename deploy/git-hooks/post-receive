@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Push-to-deploy: check out main into /opt/scanlake-refinery and install its dependencies.
+# Installed into /srv/git/scanlake-refinery.git/hooks by bootstrap-lxc.sh; runs as the admin user.
+set -euo pipefail
+
+APP_DIR="/opt/scanlake-refinery"
+REPO=$(cd "${GIT_DIR:-.}" && pwd)
+unset GIT_DIR
+
+while read -r _old new ref; do
+    if [[ $ref != refs/heads/main ]]; then
+        echo "post-receive: ignoring $ref (only main is deployed)"
+        continue
+    fi
+    echo "post-receive: deploying ${new:0:12} to $APP_DIR"
+    git --git-dir="$REPO" --work-tree="$APP_DIR" checkout --force --quiet main
+    git --git-dir="$REPO" --work-tree="$APP_DIR" clean --force -d --quiet
+    echo "${new:0:12}" > "$APP_DIR/REVISION"
+
+    cd "$APP_DIR"
+    # System Python only: a uv-managed interpreter would live in the admin's home, which the
+    # service user can't read.
+    UV_PYTHON_PREFERENCE=only-system UV_LINK_MODE=copy UV_COMPILE_BYTECODE=1 \
+        uv sync --frozen --no-dev --quiet
+    .venv/bin/refinery --version
+
+    for unit in scanlake-refinery.service scanlake-refinery.timer; do
+        if ! cmp -s "deploy/systemd/$unit" "/etc/systemd/system/$unit"; then
+            echo "post-receive: $unit differs from the installed one;" \
+                "run: sudo $APP_DIR/deploy/install-units.sh"
+        fi
+    done
+done

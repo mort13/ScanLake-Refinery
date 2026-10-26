@@ -1,0 +1,36 @@
+[Unit]
+Description=ScanLake Refinery: sync, consolidate, compute, publish
+Documentation=file:///opt/scanlake-refinery/README.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=scanlake
+Group=scanlake
+Environment=REFINERY_DATA_DIR=/var/lib/scanlake-refinery
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=/etc/scanlake-refinery/refinery.env
+WorkingDirectory=/var/lib/scanlake-refinery
+ExecStart=/opt/scanlake-refinery/.venv/bin/refinery run
+TimeoutStartSec=30min
+Nice=10
+UMask=0027
+
+# Sandboxing: the job only needs its data dir and outbound HTTPS to the Gateway.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/scanlake-refinery
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
