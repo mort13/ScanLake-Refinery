@@ -86,21 +86,27 @@ def test_deposit_shares_and_material_distribution(results):
     ]
 
 
-def test_material_mass_and_quality(results):
+def test_material_mass_and_quality_bands(results):
+    bands = [(0, 100)] + [(lo, lo + 99) for lo in range(101, 1000, 100)]
+    assert [
+        name
+        for (name, *_) in rows(results, "DESCRIBE results_deposit_materials")
+        if name.startswith("quality")
+    ] == [f"quality_{lo}_{hi}_pct" for lo, hi in bands]
+    no_quality = (None,) * 10
     assert rows(
         results,
-        "SELECT material, total_material_mass, quality_avg, quality_weighted_avg, quality_min, "
-        "quality_median, quality_max FROM results_deposit_materials "
-        "WHERE gravity_well = 'Bloom' ORDER BY deposit, material",
+        "SELECT material, total_material_mass, COLUMNS('^quality_') "
+        "FROM results_deposit_materials WHERE gravity_well = 'Bloom' ORDER BY deposit, material",
     ) == [
-        ("Gold", 50.0, 800.0, 800.0, 800, 800, 800),
+        ("Gold", 50.0, 0, 0, 0, 0, 0, 0, 0, 100.0, 0, 0),
         # Inert material carries no quality.
-        ("Inert Materials", 1200.0, None, None, None, None, None),
-        # Entries 500 @ 650, 700 @ 1800, 300 @ 300 (mass).
-        ("Iron", 2750.0, 500.0, 609.09, 300, 500, 700),
-        ("Inert Materials", 1000.0, None, None, None, None, None),
+        ("Inert Materials", 1200.0, *no_quality),
+        # SCU by quality: 0.4 @ 300, 1.3 @ 500, 2.4 @ 700 (band upper edges).
+        ("Iron", 2750.0, 0, 0, 9.76, 0, 31.71, 0, 58.54, 0, 0, 0),
+        ("Inert Materials", 1000.0, *no_quality),
         # 1518 is no valid quality.
-        ("Quartz", 1000.0, None, None, None, None, None),
+        ("Quartz", 1000.0, *no_quality),
     ]
 
 
