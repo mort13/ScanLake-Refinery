@@ -38,14 +38,14 @@ SCANS = [
     *[scan(f"s4-{i}", "s4", DOC, JUNE_4, 10 * i, CLIO, "Copper", 100) for i in range(29)],
 ]
 COMPOSITIONS = [
-    ["r1", 0, "Iron", 65.0, 500],
-    ["r1", 1, "Gold", 5.0, 800],
-    ["r1", 2, "Inert Materials", 30.0, 0],
-    ["r2", 0, "Iron", 60.0, 700],
-    ["r2", 1, "Iron", 10.0, 300],  # the same mineral twice in one rock
-    ["r2", 2, "Inert Materials", 30.0, 0],
-    ["r3", 0, "Quartz", 50.0, 1518],  # out-of-range quality
-    ["r3", 1, "Inert Materials", 50.0, 0],
+    ["r1", 0, "Iron", 65.0, 500, 1.3],
+    ["r1", 1, "Gold", 5.0, 800, 0.1],
+    ["r1", 2, "Inert Materials", 30.0, 0, 0.6],
+    ["r2", 0, "Iron", 60.0, 700, 2.4],
+    ["r2", 1, "Iron", 10.0, 300, 0.4],  # the same mineral twice in one rock
+    ["r2", 2, "Inert Materials", 30.0, 0, 1.2],
+    ["r3", 0, "Quartz", 50.0, 1518, 1.0],  # out-of-range quality
+    ["r3", 1, "Inert Materials", 50.0, 0, 1.0],
 ]
 
 
@@ -58,8 +58,8 @@ def results(con, tmp_path):
         SCANS,
     )
     con.executemany(
-        "INSERT INTO compositions (capture_id, mat_index, type, amount, quality) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO compositions (capture_id, mat_index, type, amount, quality, material_volume) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
         COMPOSITIONS,
     )
     jobs.compute(con)
@@ -101,6 +101,21 @@ def test_material_mass_and_quality(results):
         ("Inert Materials", 1000.0, None, None, None, None, None),
         # 1518 is no valid quality.
         ("Quartz", 1000.0, None, None, None, None, None),
+    ]
+
+
+def test_material_scu(results):
+    assert rows(
+        results,
+        "SELECT deposit, material, total_scu, avg_scu_when_present FROM results_deposit_materials "
+        "WHERE gravity_well = 'Bloom' ORDER BY deposit, material",
+    ) == [
+        ("Iron", "Gold", 0.1, 0.1),
+        ("Iron", "Inert Materials", 1.8, 0.9),
+        # r2 lists Iron twice: 2.4 + 0.4 SCU count as one rock with 2.8.
+        ("Iron", "Iron", 4.1, 2.05),
+        ("Quartz", "Inert Materials", 1.0, 1.0),
+        ("Quartz", "Quartz", 1.0, 1.0),
     ]
 
 

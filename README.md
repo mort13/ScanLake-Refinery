@@ -64,13 +64,13 @@ between saves of one session; gaps over 10 minutes count as breaks and are left 
 
 | Job | One row per | Columns |
 |---|---|---|
-| `deposit_materials`, `deposit_materials_by_region` | location × deposit × material | `location_scans`; `deposit_scans`, `deposit_share_pct` (of the location's rocks), `deposit_clusters`, `deposit_avg_mass`, `deposit_total_mass`, `deposit_last_scan_at`; `composition_scans` (deposit rocks with a composition), `material_scans`, `presence_pct`, `avg_share_pct` (mean % of the rock, absent = 0; sums to 100 per deposit), `avg_share_when_present_pct`, `total_material_mass`; `quality_avg`, `quality_weighted_avg` (by material mass), `quality_min`/`_p25`/`_median`/`_p75`/`_max` |
+| `deposit_materials`, `deposit_materials_by_region` | location × deposit × material | `location_scans`; `deposit_scans`, `deposit_share_pct` (of the location's rocks), `deposit_clusters`, `deposit_avg_mass`, `deposit_total_mass`, `deposit_last_scan_at`; `composition_scans` (deposit rocks with a composition), `material_scans`, `presence_pct`, `avg_share_pct` (mean % of the rock, absent = 0; sums to 100 per deposit), `avg_share_when_present_pct`, `total_material_mass`, `total_scu` and `avg_scu_when_present` (from `material_volume`, SCU per rock that contains the material); `quality_avg`, `quality_weighted_avg` (by material mass), `quality_min`/`_p25`/`_median`/`_p75`/`_max` |
 | `location_stats`, `location_stats_by_region` | location | `scans`, `clusters`, `sessions`, `users`, `deposits`, `total_mass`, `avg_mass`, `first_scan_at`, `last_scan_at`, `gaps_counted`, `avg_gap_seconds`, `median_gap_seconds` |
 | `user_stats` | user name (case-insensitive) | `user_ids`, `sessions`, `scans`, `clusters`, `total_mass`, `biggest_scan_mass`, `most_scans_in_session`, `best_session_avg_gap_seconds` (sessions with ≥ 30 scans), `avg_gap_seconds`, `first_scan_at`, `last_scan_at` |
 | `highscores` | category × rank | `user_name`, `value`, `unit`, `session_id`, `capture_id`, `achieved_at`, `detail`; categories `fastest_session_avg_scan_time` (≥ 30 scans, lower wins), `biggest_scan`, `most_scans_in_session`, `most_scans_total`; top 10, each user's best entry only, ties go to the earlier one |
 | `scan_counts` | day × location × deposit | `rocks`, `clusters`, `sessions`, `total_mass` |
 
-A rock can list the same mineral twice; shares and presence add those entries up, quality
+A rock can list the same mineral twice; shares, SCU and presence add those entries up, quality
 statistics use each entry. Quality is NULL for `Inert Materials` and for values outside 0–1000.
 Example:
 

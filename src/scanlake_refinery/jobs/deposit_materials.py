@@ -30,6 +30,8 @@ def deposit_materials_sql(keys: list[str]) -> str:
                 count(DISTINCT capture_id) AS material_scans,
                 sum(amount) AS amount_sum,
                 sum(material_mass) AS total_material_mass,
+                sum(material_volume) AS total_scu,
+                count(DISTINCT capture_id) FILTER (material_volume IS NOT NULL) AS scu_scans,
                 avg(quality) AS quality_avg,
                 sum(quality * material_mass)
                     / nullif(sum(material_mass) FILTER (quality IS NOT NULL), 0)
@@ -56,6 +58,8 @@ def deposit_materials_sql(keys: list[str]) -> str:
             round(m.amount_sum / nullif(d.composition_scans, 0), 2) AS avg_share_pct,
             round(m.amount_sum / m.material_scans, 2) AS avg_share_when_present_pct,
             round(m.total_material_mass, 2) AS total_material_mass,
+            round(m.total_scu, 2) AS total_scu,
+            round(m.total_scu / nullif(m.scu_scans, 0), 2) AS avg_scu_when_present,
             round(m.quality_avg, 2) AS quality_avg,
             round(m.quality_weighted_avg, 2) AS quality_weighted_avg,
             m.quality_min, m.quality_p25, m.quality_median, m.quality_p75, m.quality_max

@@ -40,7 +40,7 @@ def scan_gaps(keys: list[str]) -> str:
 # One row per composition entry with its scan. A rock can list the same mineral more than once.
 # Quality is meaningless for inert material and out of range for a few old OCR misreads.
 ROCK_MATERIALS = f"""
-    SELECT s.*, c.mat_index, c.type AS material, c.amount,
+    SELECT s.*, c.mat_index, c.type AS material, c.amount, c.material_volume,
         s.mass * c.amount / 100 AS material_mass,
         CASE WHEN c.type = '{INERT}' OR c.quality NOT BETWEEN 0 AND 1000 THEN NULL
             ELSE c.quality END AS quality
