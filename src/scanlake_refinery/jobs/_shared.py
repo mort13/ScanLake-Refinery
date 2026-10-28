@@ -22,7 +22,8 @@ USER_NAME = "arg_max(coalesce(nullif(trim(user_name), ''), user_id), \"timestamp
 
 def scan_gaps(keys: list[str]) -> str:
     """Every scan plus `user_key`, `gap_seconds` since the previous scan of its session,
-    `counted` (the gap is no pause) and `same_location` (the previous scan had the same `keys`)."""
+    `counted` (the gap is no pause), `same_location` (the previous scan had the same `keys`) and
+    `new_cluster` (the previous scan was in another cluster)."""
     same = " AND ".join(f"{k} IS NOT DISTINCT FROM lag({k}) OVER w" for k in keys)
     return f"""
         SELECT *, gap_seconds <= {PAUSE_SECONDS} AS counted FROM (
@@ -30,7 +31,8 @@ def scan_gaps(keys: list[str]) -> str:
                 {USER_KEY} AS user_key,
                 date_diff('millisecond', lag("timestamp") OVER w, "timestamp") / 1000.0
                     AS gap_seconds,
-                {same} AS same_location
+                {same} AS same_location,
+                cluster_id IS DISTINCT FROM lag(cluster_id) OVER w AS new_cluster
             FROM scans
             WINDOW w AS (PARTITION BY session_id ORDER BY "timestamp", capture_id)
         )

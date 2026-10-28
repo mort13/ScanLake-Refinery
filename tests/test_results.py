@@ -11,10 +11,10 @@ KEEGER = ("Nyx", "Keeger Ring", None)
 CLIO = ("Stanton", "Clio", None)
 
 
-def scan(capture, session, user, start, seconds, location, deposit, mass):
+def scan(capture, session, user, start, seconds, location, deposit, mass, cluster="c"):
     user_id, user_name = user
     ts = (start + timedelta(seconds=seconds)).strftime("%Y-%m-%d %H:%M:%S+00")
-    return [capture, "c", session, user_id, user_name, ts, *location, deposit, mass]
+    return [capture, cluster, session, user_id, user_name, ts, *location, deposit, mass]
 
 
 MORT = ("u1", "Mort13")
@@ -24,15 +24,15 @@ JUNE_1, JUNE_2 = datetime(2026, 6, 1, 10), datetime(2026, 6, 2, 10)
 JUNE_3, JUNE_4 = datetime(2026, 6, 3, 10), datetime(2026, 6, 4, 10)
 
 SCANS = [
-    # Bloom: 1 min apart, then a 15 min pause.
-    scan("r1", "s1", MORT, JUNE_1, 0, BLOOM, "Iron", 1000),
-    scan("r2", "s1", MORT, JUNE_1, 60, BLOOM, "Iron", 3000),
-    scan("r3", "s1", MORT, JUNE_1, 120, BLOOM, "Quartz", 2000),
-    scan("r4", "s1", MORT, JUNE_1, 1020, BLOOM, "Quartz", 500),  # no composition
-    # Keeger Ring: two scans near PSS Theta, then one without region.
-    scan("k1", "s2", MORT_ALT, JUNE_2, 0, THETA, "Ice", 1000),
-    scan("k2", "s2", MORT_ALT, JUNE_2, 30, THETA, "Ice", 1000),
-    scan("k3", "s2", MORT_ALT, JUNE_2, 90, KEEGER, "Ice", 1000),
+    # Bloom: four one-rock clusters 1 min apart, then a 15 min pause.
+    scan("r1", "s1", MORT, JUNE_1, 0, BLOOM, "Iron", 1000, "c1"),
+    scan("r2", "s1", MORT, JUNE_1, 60, BLOOM, "Iron", 3000, "c2"),
+    scan("r3", "s1", MORT, JUNE_1, 120, BLOOM, "Quartz", 2000, "c3"),
+    scan("r4", "s1", MORT, JUNE_1, 1020, BLOOM, "Quartz", 500, "c4"),  # no composition
+    # Keeger Ring: a two-rock cluster near PSS Theta, then a cluster without region.
+    scan("k1", "s2", MORT_ALT, JUNE_2, 0, THETA, "Ice", 1000, "c5"),
+    scan("k2", "s2", MORT_ALT, JUNE_2, 30, THETA, "Ice", 1000, "c5"),
+    scan("k3", "s2", MORT_ALT, JUNE_2, 90, KEEGER, "Ice", 1000, "c6"),
     # Clio: a 30-scan session at 20 s and a faster 29-scan session that is too short to rank.
     *[scan(f"s3-{i}", "s3", DOC, JUNE_3, 20 * i, CLIO, "Copper", 100) for i in range(30)],
     *[scan(f"s4-{i}", "s4", DOC, JUNE_4, 10 * i, CLIO, "Copper", 100) for i in range(29)],
@@ -92,18 +92,25 @@ def test_material_mass_and_quality_bands(results):
         name
         for (name, *_) in rows(results, "DESCRIBE results_deposit_materials")
         if name.startswith("quality")
-    ] == [f"quality_{lo}_{hi}_pct" for lo, hi in bands]
-    no_quality = (None,) * 10
+    ] == [f"quality_{lo}_{hi}_scu_pct" for lo, hi in bands] + [
+        f"quality_{lo}_{hi}_count_pct" for lo, hi in bands
+    ]
+    no_quality = (None,) * 20
     assert rows(
         results,
         "SELECT material, total_material_mass, COLUMNS('^quality_') "
         "FROM results_deposit_materials WHERE gravity_well = 'Bloom' ORDER BY deposit, material",
     ) == [
-        ("Gold", 50.0, 0, 0, 0, 0, 0, 0, 0, 100.0, 0, 0),
+        ("Gold", 50.0, *(0, 0, 0, 0, 0, 0, 0, 100.0, 0, 0), *(0, 0, 0, 0, 0, 0, 0, 100.0, 0, 0)),
         # Inert material carries no quality.
         ("Inert Materials", 1200.0, *no_quality),
-        # SCU by quality: 0.4 @ 300, 1.3 @ 500, 2.4 @ 700 (band upper edges).
-        ("Iron", 2750.0, 0, 0, 9.76, 0, 31.71, 0, 58.54, 0, 0, 0),
+        # Entries 0.4 SCU @ 300, 1.3 @ 500, 2.4 @ 700 (band upper edges): by SCU, then by count.
+        (
+            "Iron",
+            2750.0,
+            *(0, 0, 9.76, 0, 31.71, 0, 58.54, 0, 0, 0),
+            *(0, 0, 33.33, 0, 33.33, 0, 33.33, 0, 0, 0),
+        ),
         ("Inert Materials", 1000.0, *no_quality),
         # 1518 is no valid quality.
         ("Quartz", 1000.0, *no_quality),
@@ -122,6 +129,32 @@ def test_material_scu(results):
         ("Iron", "Iron", 4.1, 2.05),
         ("Quartz", "Inert Materials", 1.0, 1.0),
         ("Quartz", "Quartz", 1.0, 1.0),
+    ]
+
+
+def test_cluster_gaps_count_back_to_back_clusters_of_one_deposit(results):
+    assert rows(
+        results,
+        "SELECT DISTINCT deposit, deposit_cluster_gaps, deposit_avg_cluster_gap_seconds, "
+        "deposit_median_cluster_gap_seconds FROM results_deposit_materials "
+        "WHERE gravity_well IN ('Bloom', 'Keeger Ring') ORDER BY deposit",
+    ) == [
+        # k1 -> k2 stays in one cluster; k2 -> k3 starts a new Ice cluster.
+        ("Ice", 1, 60.0, 60.0),
+        # r1 -> r2 counts; r2 -> r3 switches to Quartz and r3 -> r4 is a 15 min pause.
+        ("Iron", 1, 60.0, 60.0),
+        ("Quartz", 0, None, None),
+    ]
+    # By region, k2 -> k3 leaves PSS Theta and no longer counts.
+    assert rows(
+        results,
+        "SELECT DISTINCT gravity_well, region, deposit, deposit_cluster_gaps, "
+        "deposit_avg_cluster_gap_seconds FROM results_deposit_materials_by_region "
+        "WHERE deposit IN ('Ice', 'Iron') ORDER BY gravity_well, region NULLS LAST",
+    ) == [
+        ("Bloom", None, "Iron", 1, 60.0),
+        ("Keeger Ring", "PSS Theta", "Ice", 0, None),
+        ("Keeger Ring", None, "Ice", 0, None),
     ]
 
 

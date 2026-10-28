@@ -1,5 +1,5 @@
 from . import job
-from ._shared import LOCATION, LOCATION_BY_REGION, ROCK_MATERIALS, columns, same
+from ._shared import LOCATION, LOCATION_BY_REGION, ROCK_MATERIALS, columns, same, scan_gaps
 
 # Quality bands 0-100, 101-200, ..., 901-1000.
 QUALITY_BANDS = [(0, 100)] + [(lo, lo + 99) for lo in range(101, 1000, 100)]
@@ -8,22 +8,34 @@ QUALITY_BANDS = [(0, 100)] + [(lo, lo + 99) for lo in range(101, 1000, 100)]
 def deposit_materials_sql(keys: list[str]) -> str:
     """One row per location, deposit and material; deposit columns repeat for each material.
     A deposit whose rocks have no composition gets one row with material NULL. Quality is given
-    as the share of the material's SCU in each quality band."""
+    per quality band twice: as the share of the material's SCU and of its composition entries."""
     k = ", ".join(keys)
-    band_scu = ",\n".join(
-        f"sum(material_volume) FILTER (quality BETWEEN {lo} AND {hi}) AS scu_{lo}_{hi}"
+    band_sums = ",\n".join(
+        f"sum(material_volume) FILTER (quality BETWEEN {lo} AND {hi}) AS scu_{lo}_{hi}, "
+        f"count(*) FILTER (quality BETWEEN {lo} AND {hi}) AS entries_{lo}_{hi}"
         for lo, hi in QUALITY_BANDS
     )
     band_pct = ",\n".join(
-        f"round(100 * coalesce(m.scu_{lo}_{hi}, 0) / nullif(m.rated_scu, 0), 2) "
-        f"AS quality_{lo}_{hi}_pct"
-        for lo, hi in QUALITY_BANDS
+        [
+            f"round(100 * coalesce(m.scu_{lo}_{hi}, 0) / nullif(m.rated_scu, 0), 2) "
+            f"AS quality_{lo}_{hi}_scu_pct"
+            for lo, hi in QUALITY_BANDS
+        ]
+        + [
+            f"round(100 * m.entries_{lo}_{hi} / nullif(m.rated_entries, 0), 2) "
+            f"AS quality_{lo}_{hi}_count_pct"
+            for lo, hi in QUALITY_BANDS
+        ]
     )
     return f"""
         WITH
         rocks AS (
-            SELECT *, capture_id IN (SELECT capture_id FROM compositions) AS has_composition
-            FROM scans
+            -- A cluster gap: the previous scan of the session was another cluster of this deposit
+            -- at this location, i.e. the time from one cluster's last rock to the next one's first.
+            SELECT *,
+                capture_id IN (SELECT capture_id FROM compositions) AS has_composition,
+                coalesce(counted AND same_location AND new_cluster, false) AS cluster_gap
+            FROM ({scan_gaps([*keys, "deposit"])})
         ),
         locations AS (
             SELECT {k}, count(*) AS location_scans FROM rocks GROUP BY ALL
@@ -35,7 +47,10 @@ def deposit_materials_sql(keys: list[str]) -> str:
                 count(DISTINCT cluster_id) AS deposit_clusters,
                 avg(mass) AS deposit_avg_mass,
                 sum(mass) AS deposit_total_mass,
-                max("timestamp") AS deposit_last_scan_at
+                max("timestamp") AS deposit_last_scan_at,
+                count(*) FILTER (cluster_gap) AS deposit_cluster_gaps,
+                avg(gap_seconds) FILTER (cluster_gap) AS deposit_avg_cluster_gap,
+                median(gap_seconds) FILTER (cluster_gap) AS deposit_median_cluster_gap
             FROM rocks GROUP BY ALL
         ),
         materials AS (
@@ -46,7 +61,8 @@ def deposit_materials_sql(keys: list[str]) -> str:
                 sum(material_volume) AS total_scu,
                 count(DISTINCT capture_id) FILTER (material_volume IS NOT NULL) AS scu_scans,
                 sum(material_volume) FILTER (quality IS NOT NULL) AS rated_scu,
-                {band_scu}
+                count(quality) AS rated_entries,
+                {band_sums}
             FROM ({ROCK_MATERIALS}) GROUP BY ALL
         )
         SELECT
@@ -58,6 +74,9 @@ def deposit_materials_sql(keys: list[str]) -> str:
             round(d.deposit_avg_mass, 2) AS deposit_avg_mass,
             d.deposit_total_mass,
             d.deposit_last_scan_at,
+            d.deposit_cluster_gaps,
+            round(d.deposit_avg_cluster_gap, 2) AS deposit_avg_cluster_gap_seconds,
+            round(d.deposit_median_cluster_gap, 2) AS deposit_median_cluster_gap_seconds,
             d.composition_scans,
             m.material_scans,
             round(100.0 * m.material_scans / nullif(d.composition_scans, 0), 2) AS presence_pct,
