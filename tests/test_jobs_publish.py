@@ -18,6 +18,8 @@ RESULT_KEYS = [
     "results/highscores.parquet",
     "results/location_stats.parquet",
     "results/location_stats_by_region.parquet",
+    "results/material_entries.parquet",
+    "results/material_entries_by_region.parquet",
     "results/scan_counts.parquet",
     "results/user_stats.parquet",
 ]

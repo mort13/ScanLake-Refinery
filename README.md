@@ -65,13 +65,16 @@ between saves of one session; gaps over 10 minutes count as breaks and are left 
 | Job | One row per | Columns |
 |---|---|---|
 | `deposit_materials`, `deposit_materials_by_region` | location × deposit × material | `location_scans`; `deposit_scans`, `deposit_share_pct` (of the location's rocks), `deposit_clusters`, `deposit_avg_mass`, `deposit_total_mass`, `deposit_last_scan_at`, `deposit_cluster_gaps`, `deposit_avg_cluster_gap_seconds`, `deposit_median_cluster_gap_seconds` (time from the last rock of one cluster to the first rock of the next, counted only when both clusters are this deposit at this location and follow each other in a session); `composition_scans` (deposit rocks with a composition), `material_scans`, `presence_pct`, `avg_share_pct` (mean % of the rock, absent = 0; sums to 100 per deposit), `avg_share_when_present_pct`, `total_material_mass`, `total_scu` and `avg_scu_when_present` (from `material_volume`, SCU per rock that contains the material); `quality_0_100_scu_pct`, `quality_101_200_scu_pct`, … `quality_901_1000_scu_pct` (share of the material's SCU in each quality band) and the same ten bands as `…_count_pct` (share of its composition entries); each set sums to 100 |
+| `material_entries`, `material_entries_by_region` | location × deposit × material × `entry` | `composition_scans`, `entry_scans`, `presence_pct`, `avg_share_pct`, `avg_share_when_present_pct`, `total_scu`, `avg_scu_when_present` and both quality band sets, per entry of a mineral in a rock (1 = listed first, 2 = listed second, …) |
 | `location_stats`, `location_stats_by_region` | location | `scans`, `clusters`, `sessions`, `users`, `deposits`, `total_mass`, `avg_mass`, `first_scan_at`, `last_scan_at`, `gaps_counted`, `avg_gap_seconds`, `median_gap_seconds` |
 | `user_stats` | user name (case-insensitive) | `user_ids`, `sessions`, `scans`, `clusters`, `total_mass`, `biggest_scan_mass`, `most_scans_in_session`, `best_session_avg_gap_seconds` (sessions with ≥ 30 scans), `avg_gap_seconds`, `first_scan_at`, `last_scan_at` |
 | `highscores` | category × rank | `user_name`, `value`, `unit`, `session_id`, `capture_id`, `achieved_at`, `detail`; categories `fastest_session_avg_scan_time` (≥ 30 scans, lower wins), `biggest_scan`, `most_scans_in_session`, `most_scans_total`; top 10, each user's best entry only, ties go to the earlier one |
 | `scan_counts` | day × location × deposit | `rocks`, `clusters`, `sessions`, `total_mass` |
 
-A rock can list the same mineral twice; shares, SCU and presence add those entries up, quality
-bands place each entry (and its SCU) by its own quality. The quality bands are NULL for
+A rock can list the same mineral twice, usually a small high-quality fraction first and the bulk
+second. `deposit_materials` adds those entries up for shares, SCU and presence and places each
+entry (and its SCU) in a quality band by its own quality; `material_entries` keeps them apart,
+numbered in the order the rock lists them. The quality bands are NULL for
 `Inert Materials`, and entries with a quality outside 0–1000 are left out of them.
 Example:
 

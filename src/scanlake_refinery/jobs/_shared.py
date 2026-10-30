@@ -39,15 +39,48 @@ def scan_gaps(keys: list[str]) -> str:
     """
 
 
-# One row per composition entry with its scan. A rock can list the same mineral more than once.
+# One row per composition entry with its scan. A rock can list the same mineral more than once:
+# usually a small high-quality fraction first and the bulk second. `entry` numbers a mineral's
+# entries in a rock in the order they are listed (1, 2, ...).
 # Quality is meaningless for inert material and out of range for a few old OCR misreads.
 ROCK_MATERIALS = f"""
     SELECT s.*, c.mat_index, c.type AS material, c.amount, c.material_volume,
+        row_number() OVER (PARTITION BY c.capture_id, c.type ORDER BY c.mat_index) AS entry,
         s.mass * c.amount / 100 AS material_mass,
         CASE WHEN c.type = '{INERT}' OR c.quality NOT BETWEEN 0 AND 1000 THEN NULL
             ELSE c.quality END AS quality
     FROM compositions c JOIN scans s USING (capture_id)
 """
+
+# Quality bands 0-100, 101-200, ..., 901-1000.
+QUALITY_BANDS = [(0, 100)] + [(lo, lo + 99) for lo in range(101, 1000, 100)]
+
+
+def quality_band_sums() -> str:
+    """Aggregates over ROCK_MATERIALS rows that quality_band_pcts() turns into percentages."""
+    sums = [
+        "sum(material_volume) FILTER (quality IS NOT NULL) AS rated_scu",
+        "count(quality) AS rated_entries",
+    ]
+    for lo, hi in QUALITY_BANDS:
+        sums.append(f"sum(material_volume) FILTER (quality BETWEEN {lo} AND {hi}) AS scu_{lo}_{hi}")
+        sums.append(f"count(*) FILTER (quality BETWEEN {lo} AND {hi}) AS entries_{lo}_{hi}")
+    return ",\n".join(sums)
+
+
+def quality_band_pcts(alias: str) -> str:
+    """Share of the SCU, then of the entries, in each quality band; NULL without a quality."""
+    scu = [
+        f"round(100 * coalesce({alias}.scu_{lo}_{hi}, 0) / nullif({alias}.rated_scu, 0), 2) "
+        f"AS quality_{lo}_{hi}_scu_pct"
+        for lo, hi in QUALITY_BANDS
+    ]
+    count = [
+        f"round(100 * {alias}.entries_{lo}_{hi} / nullif({alias}.rated_entries, 0), 2) "
+        f"AS quality_{lo}_{hi}_count_pct"
+        for lo, hi in QUALITY_BANDS
+    ]
+    return ",\n".join(scu + count)
 
 
 def columns(keys: list[str], alias: str) -> str:

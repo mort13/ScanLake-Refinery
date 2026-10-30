@@ -132,6 +132,37 @@ def test_material_scu(results):
     ]
 
 
+def test_material_entries_split_a_mineral_listed_twice(results):
+    assert rows(
+        results,
+        "SELECT deposit, material, entry, entry_scans, presence_pct, avg_share_pct, "
+        "avg_share_when_present_pct, total_scu, avg_scu_when_present FROM results_material_entries "
+        "WHERE gravity_well = 'Bloom' ORDER BY deposit, material, entry",
+    ) == [
+        ("Iron", "Gold", 1, 1, 50.0, 2.5, 5.0, 0.1, 0.1),
+        ("Iron", "Inert Materials", 1, 2, 100.0, 30.0, 30.0, 1.8, 0.9),
+        # r1's only Iron entry and r2's first one; r2 lists Iron a second time.
+        ("Iron", "Iron", 1, 2, 100.0, 62.5, 62.5, 3.7, 1.85),
+        ("Iron", "Iron", 2, 1, 50.0, 5.0, 10.0, 0.4, 0.4),
+        ("Quartz", "Inert Materials", 1, 1, 100.0, 50.0, 50.0, 1.0, 1.0),
+        ("Quartz", "Quartz", 1, 1, 100.0, 50.0, 50.0, 1.0, 1.0),
+    ]
+    assert rows(
+        results,
+        "SELECT entry, COLUMNS('_scu_pct$'), COLUMNS('_count_pct$') FROM results_material_entries "
+        "WHERE gravity_well = 'Bloom' AND material = 'Iron' ORDER BY entry",
+    ) == [
+        # 1.3 SCU @ 500 and 2.4 SCU @ 700.
+        (1, *(0, 0, 0, 0, 35.14, 0, 64.86, 0, 0, 0), *(0, 0, 0, 0, 50.0, 0, 50.0, 0, 0, 0)),
+        (2, *(0, 0, 100.0, 0, 0, 0, 0, 0, 0, 0), *(0, 0, 100.0, 0, 0, 0, 0, 0, 0, 0)),
+    ]
+    assert rows(
+        results,
+        "SELECT region, count(*) FROM results_material_entries_by_region "
+        "WHERE gravity_well = 'Bloom' GROUP BY ALL",
+    ) == [(None, 6)]
+
+
 def test_cluster_gaps_count_back_to_back_clusters_of_one_deposit(results):
     assert rows(
         results,

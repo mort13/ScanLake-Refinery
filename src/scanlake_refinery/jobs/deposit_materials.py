@@ -1,8 +1,14 @@
 from . import job
-from ._shared import LOCATION, LOCATION_BY_REGION, ROCK_MATERIALS, columns, same, scan_gaps
-
-# Quality bands 0-100, 101-200, ..., 901-1000.
-QUALITY_BANDS = [(0, 100)] + [(lo, lo + 99) for lo in range(101, 1000, 100)]
+from ._shared import (
+    LOCATION,
+    LOCATION_BY_REGION,
+    ROCK_MATERIALS,
+    columns,
+    quality_band_pcts,
+    quality_band_sums,
+    same,
+    scan_gaps,
+)
 
 
 def deposit_materials_sql(keys: list[str]) -> str:
@@ -10,23 +16,6 @@ def deposit_materials_sql(keys: list[str]) -> str:
     A deposit whose rocks have no composition gets one row with material NULL. Quality is given
     per quality band twice: as the share of the material's SCU and of its composition entries."""
     k = ", ".join(keys)
-    band_sums = ",\n".join(
-        f"sum(material_volume) FILTER (quality BETWEEN {lo} AND {hi}) AS scu_{lo}_{hi}, "
-        f"count(*) FILTER (quality BETWEEN {lo} AND {hi}) AS entries_{lo}_{hi}"
-        for lo, hi in QUALITY_BANDS
-    )
-    band_pct = ",\n".join(
-        [
-            f"round(100 * coalesce(m.scu_{lo}_{hi}, 0) / nullif(m.rated_scu, 0), 2) "
-            f"AS quality_{lo}_{hi}_scu_pct"
-            for lo, hi in QUALITY_BANDS
-        ]
-        + [
-            f"round(100 * m.entries_{lo}_{hi} / nullif(m.rated_entries, 0), 2) "
-            f"AS quality_{lo}_{hi}_count_pct"
-            for lo, hi in QUALITY_BANDS
-        ]
-    )
     return f"""
         WITH
         rocks AS (
@@ -60,9 +49,7 @@ def deposit_materials_sql(keys: list[str]) -> str:
                 sum(material_mass) AS total_material_mass,
                 sum(material_volume) AS total_scu,
                 count(DISTINCT capture_id) FILTER (material_volume IS NOT NULL) AS scu_scans,
-                sum(material_volume) FILTER (quality IS NOT NULL) AS rated_scu,
-                count(quality) AS rated_entries,
-                {band_sums}
+                {quality_band_sums()}
             FROM ({ROCK_MATERIALS}) GROUP BY ALL
         )
         SELECT
@@ -85,7 +72,7 @@ def deposit_materials_sql(keys: list[str]) -> str:
             round(m.total_material_mass, 2) AS total_material_mass,
             round(m.total_scu, 2) AS total_scu,
             round(m.total_scu / nullif(m.scu_scans, 0), 2) AS avg_scu_when_present,
-            {band_pct}
+            {quality_band_pcts("m")}
         FROM deposits d
         JOIN locations l ON {same(keys, "d", "l")}
         LEFT JOIN materials m ON {same([*keys, "deposit"], "d", "m")}
