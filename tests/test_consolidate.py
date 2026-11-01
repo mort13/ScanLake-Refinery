@@ -24,7 +24,7 @@ def test_counts_and_canonical_types(con, raw_dir):
     types = dict(
         rows(con, "SELECT column_name, data_type FROM duckdb_columns() WHERE table_name = 'scans'")
     )
-    assert types["mass"] == "INTEGER"
+    assert types["mass"] == "DOUBLE"  # format v2: decimals for deposits under 1 SCU
     assert types["resistance"] == "INTEGER"
     assert types["timestamp"] == "TIMESTAMP WITH TIME ZONE"
     assert types["source_key"] == "VARCHAR"
@@ -118,6 +118,33 @@ def test_names_are_normalised(con, raw_dir, tmp_path):
         ("Quantanium",),
         ("Taranite",),
     ]
+
+
+def test_decimal_mass_survives(con, raw_dir, tmp_path):
+    """Format v2: a batch with a deposit under 1 SCU writes mass as DOUBLE (12.34); the others
+    stay INT32 / BIGINT, and all of them consolidate into one DOUBLE column."""
+    session = f"2026/11/01/{CURRENT.split('/')[3]}/33333333-3333-4333-8333-333333333333"
+    write_raw(
+        raw_dir,
+        {
+            f"{session}/scans_batch001.parquet": """
+                SELECT * FROM (VALUES
+                    ('s3', 'u1', 'Mort13', 'RR', '2026-11-01T20:55:47.000Z', 'm1', 'c3', 'Pyro',
+                     'Pyro I', 'none', 'none', 'Feynmaline', 12.34::DOUBLE, 0::INTEGER, 14.22,
+                     0.02526)
+                ) t(session_id, user_id, user_name, org, "timestamp", capture_id, cluster_id,
+                    system, gravity_well, region, place, deposit, mass, resistance, instability,
+                    volume)
+            """,
+        },
+        tmp_path / "fixtures",
+    )
+
+    consolidate(con, raw_dir)
+
+    assert rows(con, "SELECT mass, volume FROM scans WHERE capture_id = 'm1'") == [(12.34, 0.02526)]
+    assert rows(con, "SELECT mass FROM scans WHERE capture_id = 'b1'") == [(1000.0,)]
+    assert rows(con, "SELECT mass FROM scans WHERE capture_id = 'a2'") == [(12000.0,)]
 
 
 def test_latest_batch_wins_per_capture(con, raw_dir, tmp_path):

@@ -5,7 +5,9 @@ Rebuilt from scratch on every run. Handles the schema drift in the bucket:
     resistance as int64; their compositions lack min_confidence;
   - the confidences files from that period hold only (capture_id, min_confidence), an artefact of
     the Store's migrate_confidences.py, and are excluded;
-  - `timestamp` is an ISO string, with or without milliseconds / "Z", and becomes TIMESTAMPTZ (UTC).
+  - `timestamp` is an ISO string, with or without milliseconds / "Z", and becomes TIMESTAMPTZ (UTC);
+  - from format v2, `mass` is INT32 or, in batches holding a deposit under 1 SCU (whose mass has
+    decimals, e.g. 12.34), DOUBLE; it is read as DOUBLE.
 Rows are deduplicated per capture: the most recently uploaded file wins.
 
 Names are normalised after the rebuild: deposit and mineral names are capitalised word by word
@@ -46,7 +48,7 @@ SCAN_COLUMNS = [
     ("region", "VARCHAR"),
     ("place", "VARCHAR"),
     ("deposit", "VARCHAR"),
-    ("mass", "INTEGER"),
+    ("mass", "DOUBLE"),
     ("resistance", "INTEGER"),
     ("instability", "DOUBLE"),
     ("volume", "DOUBLE"),
