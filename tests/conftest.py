@@ -14,6 +14,8 @@ from scanlake_refinery.gateway import GatewayClient
 
 API_KEY = "sk_" + "a" * 64
 USER = "bcc6dfdf-d483-43c1-a6f9-c3fd2ebb1db7"
+FRONTDESK_URL = "https://frontdesk.test"
+FRONTDESK_TOKEN = "fd_" + "b" * 32
 
 LEGACY = f"2026/03/28/{USER}/11111111-1111-4111-8111-111111111111"
 CURRENT = f"2026/06/24/{USER}/22222222-2222-4222-8222-222222222222"
@@ -163,6 +165,29 @@ def _etag(data: bytes) -> str:
     return hashlib.md5(data).hexdigest()
 
 
+class FakeFrontDesk:
+    """Stand-in for ScanLake FrontDesk's ingest route, served through httpx.MockTransport."""
+
+    def __init__(self) -> None:
+        self.requests: list[httpx.Request] = []
+        # (method, path) per request; point it at FakeGateway.requests for one shared timeline.
+        self.log: list[tuple[str, str]] = []
+        self.status = 204
+        self.error: Exception | None = None
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        self.log.append((request.method, request.url.path))
+        if self.error is not None:
+            raise self.error
+        if request.headers.get("Authorization") != f"Bearer {FRONTDESK_TOKEN}":
+            return httpx.Response(401)
+        return httpx.Response(self.status)
+
+    def events(self) -> list[dict]:
+        return [json.loads(r.content) for r in self.requests]
+
+
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     return Settings(
@@ -188,6 +213,11 @@ def gateway(tmp_path: Path) -> FakeGateway:
     for key, data in NON_DATA_FILES.items():
         fake.put_raw(key, data)
     return fake
+
+
+@pytest.fixture
+def frontdesk() -> FakeFrontDesk:
+    return FakeFrontDesk()
 
 
 @pytest.fixture

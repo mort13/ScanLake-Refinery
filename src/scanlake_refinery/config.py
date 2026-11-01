@@ -21,6 +21,8 @@ class Settings:
     data_dir: Path
     publish: bool
     http_timeout: float = 60.0
+    frontdesk_url: str | None = None
+    frontdesk_token: str | None = None
 
     @property
     def raw_dir(self) -> Path:
@@ -81,4 +83,6 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         data_dir=Path(env.get("REFINERY_DATA_DIR", "./data")).resolve(),
         publish=_parse_bool(env.get("REFINERY_PUBLISH", "true")),
         http_timeout=http_timeout,
+        frontdesk_url=env.get("FRONTDESK_URL", "").rstrip("/") or None,
+        frontdesk_token=env.get("FRONTDESK_TOKEN") or None,
     )

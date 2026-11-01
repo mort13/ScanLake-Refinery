@@ -15,6 +15,7 @@ from .config import ConfigError, Settings, load_dotenv, load_settings
 from .consolidate import consolidate
 from .gateway import GatewayClient, GatewayError
 from .lock import LockedError, RunLock
+from .notify import FrontDesk, Totals
 from .sync import sync
 
 log = logging.getLogger("scanlake_refinery")
@@ -27,6 +28,10 @@ def make_client(settings: Settings) -> GatewayClient:
     return GatewayClient(
         settings.gateway_url, settings.require_api_key(), timeout=settings.http_timeout
     )
+
+
+def make_frontdesk(settings: Settings) -> FrontDesk:
+    return FrontDesk(settings.frontdesk_url, settings.frontdesk_token)
 
 
 def cmd_sync(args: argparse.Namespace, settings: Settings) -> int:
@@ -59,18 +64,32 @@ def cmd_publish(args: argparse.Namespace, settings: Settings) -> int:
 
 def cmd_run(args: argparse.Namespace, settings: Settings) -> int:
     do_publish = settings.publish and not args.no_publish
+    frontdesk = make_frontdesk(settings)
 
     def step(con: duckdb.DuckDBPyConnection, run_id: str) -> dict:
-        with make_client(settings) as client:
-            details = {"sync": sync(con, client, settings.raw_dir)}
-            details["consolidate"] = consolidate(con, settings.raw_dir)
-            details["compute"] = jobs.compute(con)
-            details["export"] = len(publish.export(con, settings.out_dir, run_id))
-            if do_publish:
-                details["publish"] = publish.upload(con, client, settings.out_dir)
-            return details
+        frontdesk.started(run_id)
+        try:
+            with make_client(settings) as client:
+                details = {"sync": sync(con, client, settings.raw_dir)}
+                details["consolidate"] = consolidate(con, settings.raw_dir)
+                details["compute"] = jobs.compute(con)
+                details["export"] = len(publish.export(con, settings.out_dir, run_id))
+                if do_publish:
+                    details["publish"] = publish.upload(con, client, settings.out_dir)
+            frontdesk.finished(run_id, _totals(con, details["consolidate"]["scans"]))
+        except BaseException as e:
+            frontdesk.failed(run_id, f"{type(e).__name__}: {e}")
+            raise
+        return details
 
     return _run(settings, "run", step)
+
+
+def _totals(con: duckdb.DuckDBPyConnection, scans: int) -> Totals:
+    sessions, users = con.execute(
+        "SELECT count(DISTINCT session_id), count(DISTINCT user_id) FROM scans"
+    ).fetchone()
+    return {"scans": scans, "sessions": sessions, "users": users}
 
 
 def cmd_status(args: argparse.Namespace, settings: Settings) -> int:

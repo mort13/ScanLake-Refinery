@@ -7,8 +7,9 @@ The processing worker of ScanLake. It runs on a private Proxmox server and, once
 3. **computes** result tables (`results_<job>`),
 4. **publishes** consolidated data and results to the `scanlake-derived` bucket.
 
-All traffic goes through **ScanLake Gateway** (`https://gateway.scanlake.rocks`). The server holds
-no R2 credentials, only one Gateway API key. It makes outbound HTTPS calls and nothing else; SSH
+All data traffic goes through **ScanLake Gateway** (`https://gateway.scanlake.rocks`). The server
+holds no R2 credentials, only one Gateway API key (and optionally a FrontDesk token for run
+notifications). It makes outbound HTTPS calls and nothing else; SSH
 is LAN-only and key-only and is used for administration and deployment.
 
 ```
@@ -131,6 +132,8 @@ With a Gateway key in `.env`, `refinery sync --dry-run` shows what a sync would 
 | `REFINERY_DATA_DIR` | `./data` | |
 | `REFINERY_PUBLISH` | `true` | `false` keeps results local |
 | `REFINERY_HTTP_TIMEOUT` | `60` | seconds |
+| `FRONTDESK_URL` | none | e.g. `https://scanlake.rocks`; see FrontDesk notifications below |
+| `FRONTDESK_TOKEN` | none | bearer token for FrontDesk's `/api/ingest/refinery` |
 
 ## Server setup (one time)
 
@@ -222,13 +225,18 @@ The first command shows the next and last run. `journalctl` shows the logs of th
 - **Backups:** `raw/` is a full archive of the bucket, so include the container in a vzdump job
   (Datacenter > Backup).
 - **Failed runs** show up as a failed unit (`systemctl --failed`) and as `failed` in
-  `refinery status`. Notifications (e.g. `OnFailure=` or a healthcheck ping) aren't set up yet.
+  `refinery status`.
+- **FrontDesk notifications:** with `FRONTDESK_URL` and `FRONTDESK_TOKEN` set, `refinery run`
+  posts `started`, `finished` (with total scans, sessions and contributors) or `failed` (with the
+  error) to `POST /api/ingest/refinery` on ScanLake FrontDesk, the landing page at
+  `https://scanlake.rocks`. They are best effort: an unreachable FrontDesk only logs a warning
+  and never fails a run. The other commands send nothing.
 - **`status=226/NAMESPACE`:** the sandboxing in the unit needs `nesting=1` on the container.
 
 ## Security model
 
-- **No inbound exposure.** The container only opens outbound HTTPS to the Gateway. There is no
-  port forward on the router.
+- **No inbound exposure.** The container only opens outbound HTTPS to the Gateway (and, when
+  configured, FrontDesk). There is no port forward on the router.
 - **SSH** is key-only, for one admin user, from `192.168.178.*` only. Root login is off.
 - **The Gateway key** can read raw files and write only to the derived bucket (`derived:write`).
   It can't delete anything, and it can't write to `scanlake-data`. Browsers can't use the write
