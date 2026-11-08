@@ -111,7 +111,7 @@ def cmd_status(args: argparse.Namespace, settings: Settings) -> int:
         print(f"Raw files: {tracked} tracked, {gone} deleted in bucket, last download {last}")
         tables = con.execute(
             "SELECT table_name, estimated_size FROM duckdb_tables() WHERE schema_name = 'main' "
-            "AND (table_name IN ('scans', 'compositions', 'confidences') "
+            "AND (table_name IN ('scans', 'compositions', 'confidences', 'positions') "
             "OR table_name LIKE 'results\\_%' ESCAPE '\\') ORDER BY table_name"
         ).fetchall()
         for name, rows in tables:
@@ -156,7 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="only report what would be downloaded")
     p.set_defaults(func=cmd_sync)
 
-    p = sub.add_parser("consolidate", help="rebuild scans, compositions and confidences")
+    p = sub.add_parser("consolidate", help="rebuild scans, compositions, confidences and positions")
     p.add_argument("--raw", help="read raw files from this directory instead of the mirror")
     p.set_defaults(func=cmd_consolidate)
 

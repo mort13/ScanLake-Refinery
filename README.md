@@ -3,7 +3,8 @@
 The processing worker of ScanLake. It runs on a private Proxmox server and, once an hour:
 
 1. **syncs** new and changed raw parquet files from the `scanlake-data` bucket,
-2. **consolidates** them into clean `scans`, `compositions` and `confidences` tables,
+2. **consolidates** them into clean `scans`, `compositions`, `confidences` and `positions`
+   tables,
 3. **computes** result tables (`results_<job>`),
 4. **publishes** consolidated data and results to the `scanlake-derived` bucket.
 
@@ -29,7 +30,7 @@ Workstation ── ssh / git push (LAN) ──▶ LXC
 | Step | What it does |
 |---|---|
 | `sync` | Lists `GET /api/files` (cursor paging) and downloads only keys matching `YYYY/MM/DD/<user>/<session>/<file>.parquet` that are new or whose `etag/size/uploaded` changed. Skips `public/` and `manifest.json`. Never deletes local files: objects that vanish from the bucket are flagged `deleted_remote` and kept as an archive. |
-| `consolidate` | Rebuilds the three tables from the whole mirror (seconds at the current size). It unions schemas by name, casts `mass`/`resistance` to INTEGER and `timestamp` to TIMESTAMPTZ (UTC), and moves the pre-April-2026 inline `*_conf` columns into `confidences`. It drops the legacy `(capture_id, min_confidence)` confidences files and files deleted in the bucket. When a capture appears more than once, the newest upload wins. Every row carries `source_key`, `upload_date`, `batch` and `uploaded_at`. Names are then normalised: deposit and mineral names are capitalised (`iron` → `Iron`), variants go through the `*_ALIASES` tables, and Capture's `none` for an unset deposit, region or place becomes NULL. |
+| `consolidate` | Rebuilds the four tables from the whole mirror (seconds at the current size). It unions schemas by name, casts `mass`/`resistance` to INTEGER and `timestamp` to TIMESTAMPTZ (UTC), and moves the pre-April-2026 inline `*_conf` columns into `confidences`. It drops the legacy `(capture_id, min_confidence)` confidences files and files deleted in the bucket. When a capture appears more than once, the newest upload wins. Every row carries `source_key`, `upload_date`, `batch` and `uploaded_at`. Names are then normalised: deposit and mineral names are capitalised (`iron` → `Iron`), variants go through the `*_ALIASES` tables, and Capture's `none` for an unset deposit, region or place becomes NULL. `positions` (ship positions, see below) keeps only scans that are in `scans`. |
 | `compute` | Runs every job in `src/scanlake_refinery/jobs/` into `results_<name>`. |
 | `publish` | Exports `out/consolidated/*.parquet`, `out/results/*.parquet`, `out/monthly/**/*.parquet` (ZSTD) and `out/manifest.json`, and deletes files in `out/` that are no longer produced. It uploads only files whose sha256 changed, and the manifest last. |
 
@@ -37,7 +38,8 @@ Data directory (`REFINERY_DATA_DIR`, on the server `/var/lib/scanlake-refinery`)
 
 ```
 raw/               mirror of scanlake-data
-warehouse.duckdb   sync_state, runs, published, scans, compositions, confidences, results_*
+warehouse.duckdb   sync_state, runs, published, scans, compositions, confidences, positions,
+                   results_*
 out/               files as published (consolidated/, results/, manifest.json)
 ```
 
@@ -45,8 +47,9 @@ Derived bucket layout, readable through `GET /api/derived/<key>`:
 
 ```
 consolidated/scans.parquet  consolidated/compositions.parquet  consolidated/confidences.parquet
+consolidated/positions.parquet
 results/<job>.parquet
-monthly/YYYY/MM/<userId>/{scans,compositions,confidences}.parquet
+monthly/YYYY/MM/<userId>/{scans,compositions,confidences,positions}.parquet
 manifest.json      run_id, generated_at, revision, and rows/bytes/sha256 per file
 ```
 
@@ -71,6 +74,7 @@ between saves of one session; gaps over 10 minutes count as breaks and are left 
 | `user_stats` | user name (case-insensitive) | `user_ids`, `sessions`, `scans`, `clusters`, `total_mass`, `biggest_scan_mass`, `most_scans_in_session`, `best_session_avg_gap_seconds` (sessions with ≥ 30 scans), `avg_gap_seconds`, `first_scan_at`, `last_scan_at` |
 | `highscores` | category × rank | `user_name`, `value`, `unit`, `session_id`, `capture_id`, `achieved_at`, `detail`; categories `fastest_session_avg_scan_time` (≥ 30 scans, lower wins), `biggest_scan`, `most_scans_in_session`, `most_scans_total`; top 10, each user's best entry only, ties go to the earlier one |
 | `scan_counts` | day × location × deposit | `rocks`, `clusters`, `sessions`, `total_mass` |
+| `cluster_distances`, `cluster_distances_by_region` | location × deposit | `location_clusters` (clusters with a position), `location_cluster_pairs`, `location_avg_cluster_distance_m`, `location_median_cluster_distance_m` (over every two clusters at the location), `location_avg_nearest_cluster_m`, `location_median_nearest_cluster_m` (from each cluster to its nearest other one); the same six as `deposit_…` for clusters of this deposit only. The `location_…` columns repeat on each deposit row of a location. Metres; see Ship positions below |
 
 A rock can list the same mineral twice, usually a small high-quality fraction first and the bulk
 second. `deposit_materials` adds those entries up for shares, SCU and presence and places each
@@ -86,6 +90,25 @@ FROM 'results/deposit_materials.parquet'
 WHERE gravity_well = 'Bloom'
 ORDER BY deposit_share_pct DESC, avg_share_pct DESC;
 ```
+
+### Ship positions
+
+From format v3 an upload may carry `positions_batchNNN.parquet`: where the ship was when each
+scan was taken, read from the game's debug text (r_DisplayInfo), one row per `Zone:` line
+(`zone_index` 0 is the top line, usually the ship). Players opt in to uploading it in
+ScanLake Desktop and Capture. `consolidate` keeps the newest file per scan, like
+`compositions`, drops positions of scans missing from `scans`, and sets `is_local` on each
+scan's local zone (asteroid field, planet or station): the last line above the first
+`SolarSystem…` or `Root` line, or the top line when that line is one of them.
+
+Every Zone line is a position in its own frame. `cluster_distances` places a cluster at the
+mean position of its scans in each frame from the local zone outward, and measures two
+clusters in the innermost frame they share: the planet's frame for two clusters on one
+planet (it turns with the planet), the solar system's for clusters in two asteroid fields.
+Lines above the local zone are never used, since in the ship's own frame every cluster is at
+the ship. A cluster's deposit is the most common deposit of its rocks; clusters without one
+count for the location only. The position is the ship's, not the rock's, so distances are
+good to the scanning range.
 
 ### Adding a result job
 

@@ -13,6 +13,8 @@ JULY = date(2026, 7, 1)
 OTHER_USER = "0f0f0f0f-0000-4000-8000-000000000000"
 OTHER_RAW = f"2026/03/30/{OTHER_USER}/33333333-3333-4333-8333-333333333333"
 RESULT_KEYS = [
+    "results/cluster_distances.parquet",
+    "results/cluster_distances_by_region.parquet",
     "results/deposit_materials.parquet",
     "results/deposit_materials_by_region.parquet",
     "results/highscores.parquet",
@@ -91,6 +93,7 @@ def test_export_is_deterministic(consolidated, settings):
         "consolidated/scans.parquet",
         "consolidated/compositions.parquet",
         "consolidated/confidences.parquet",
+        "consolidated/positions.parquet",
         *RESULT_KEYS,
         f"monthly/2026/03/{OTHER_USER}/scans.parquet",
         f"monthly/2026/03/{USER}/scans.parquet",

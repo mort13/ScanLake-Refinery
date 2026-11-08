@@ -1,4 +1,5 @@
-"""Turn the raw per-session parquet files into three clean tables: scans, compositions, confidences.
+"""Turn the raw per-session parquet files into four clean tables: scans, compositions,
+confidences and positions.
 
 Rebuilt from scratch on every run. Handles the schema drift in the bucket:
   - files from 2026-03-28..04-13 carry the *_conf columns inline in scans and store mass and
@@ -9,6 +10,11 @@ Rebuilt from scratch on every run. Handles the schema drift in the bucket:
   - from format v2, `mass` is INT32 or, in batches holding a deposit under 1 SCU (whose mass has
     decimals, e.g. 12.34), DOUBLE; it is read as DOUBLE.
 Rows are deduplicated per capture: the most recently uploaded file wins.
+
+`positions` (format v3, optional in an upload) holds where the ship was when a scan was taken,
+one row per Zone line of the game's debug text. Positions of captures missing from `scans` are
+dropped, and `is_local` marks each capture's local zone (asteroid field, planet or station):
+the zone just above the first SolarSystem/Root line, as ScanLake Desktop picks it.
 
 Names are normalised after the rebuild: deposit and mineral names are capitalised word by word
 ("iron" -> "Iron"), known variants are mapped through the *_ALIASES tables, and Capture's "none"
@@ -30,7 +36,7 @@ log = logging.getLogger(__name__)
 
 RAW_FILE_RE = re.compile(
     r"^(?P<y>\d{4})/(?P<m>\d{2})/(?P<d>\d{2})/[^/]+/[^/]+/"
-    r"(?P<kind>scans|compositions|confidences)_batch(?P<batch>\d+)\.parquet$"
+    r"(?P<kind>scans|compositions|confidences|positions)_batch(?P<batch>\d+)\.parquet$"
 )
 
 CONF_COLUMNS = ["deposit_conf", "mass_conf", "resistance_conf", "instability_conf", "volume_conf"]
@@ -63,13 +69,28 @@ COMPOSITION_COLUMNS = [
     ("min_confidence", "DOUBLE"),
 ]
 CONFIDENCE_COLUMNS = [("capture_id", "VARCHAR")] + [(c, "DOUBLE") for c in CONF_COLUMNS]
+POSITION_COLUMNS = [
+    ("capture_id", "VARCHAR"),
+    ("zone_index", "INTEGER"),
+    ("zone", "VARCHAR"),
+    ("pos_x", "DOUBLE"),
+    ("pos_y", "DOUBLE"),
+    ("pos_z", "DOUBLE"),
+    ("cam_dir_x", "DOUBLE"),
+    ("cam_dir_y", "DOUBLE"),
+    ("cam_dir_z", "DOUBLE"),
+    ("confidence", "DOUBLE"),
+]
+# Zone lines that frame the whole solar system; the local zone is the line just above them.
+SYSTEM_ZONES = ("SolarSystem", "Root")
 LINEAGE_COLUMNS = [
     ("source_key", "VARCHAR"),
     ("upload_date", "DATE"),
     ("batch", "INTEGER"),
     ("uploaded_at", "TIMESTAMPTZ"),
 ]
-NAME_COLUMNS = {"system", "gravity_well", "region", "place", "deposit", "type"}
+# Trimmed, blank becomes NULL. Zone names are the game's identifiers and are not capitalised.
+NAME_COLUMNS = {"system", "gravity_well", "region", "place", "deposit", "type", "zone"}
 
 # Spelling fixes, keyed by lower-cased name and applied after the rebuild. Deposit and mineral
 # names are capitalised first, so only real variants and typos need an entry. Capture itself uses
@@ -145,7 +166,7 @@ def consolidate(con: duckdb.DuckDBPyConnection, raw_dir: Path) -> dict:
     schemas = _schemas(con, [f.path for f in files])
     by_kind = {
         kind: [f for f in files if f.kind == kind]
-        for kind in ("scans", "compositions", "confidences")
+        for kind in ("scans", "compositions", "confidences", "positions")
     }
     conf_files = [f for f in by_kind["confidences"] if _has_any(schemas[f.path], CONF_COLUMNS)]
     legacy_conf = [f for f in by_kind["confidences"] if f not in conf_files]
@@ -160,13 +181,20 @@ def consolidate(con: duckdb.DuckDBPyConnection, raw_dir: Path) -> dict:
         )
         con.execute(
             "CREATE OR REPLACE TABLE compositions AS "
-            + _latest_file_per_capture(by_kind["compositions"], COMPOSITION_COLUMNS, schemas)
+            + _latest_file_per_capture(
+                by_kind["compositions"], COMPOSITION_COLUMNS, schemas, "mat_index"
+            )
             + " ORDER BY capture_id, mat_index"
         )
         con.execute(
             "CREATE OR REPLACE TABLE confidences AS "
             + _latest_per_capture(conf_files + inline_conf, CONFIDENCE_COLUMNS, schemas)
             + " ORDER BY capture_id"
+        )
+        con.execute(
+            "CREATE OR REPLACE TABLE positions AS "
+            + _positions(by_kind["positions"], schemas)
+            + " ORDER BY capture_id, zone_index"
         )
         _normalise_names(con)
         con.execute("COMMIT")
@@ -182,15 +210,22 @@ def consolidate(con: duckdb.DuckDBPyConnection, raw_dir: Path) -> dict:
         "scans": _count(con, "scans"),
         "compositions": _count(con, "compositions"),
         "confidences": _count(con, "confidences"),
+        "positions": _count(con, "positions"),
+        "captures_with_position": con.execute(
+            "SELECT count(DISTINCT capture_id) FROM positions"
+        ).fetchone()[0],
         "clusters": con.execute("SELECT count(DISTINCT cluster_id) FROM scans").fetchone()[0],
     }
     log.info(
-        "consolidate: %d files -> %d scans, %d compositions, %d confidences, %d clusters",
+        "consolidate: %d files -> %d scans, %d compositions, %d confidences, %d clusters, "
+        "%d positions of %d scans",
         summary["raw_files"],
         summary["scans"],
         summary["compositions"],
         summary["confidences"],
         summary["clusters"],
+        summary["positions"],
+        summary["captures_with_position"],
     )
     return summary
 
@@ -242,8 +277,9 @@ def _latest_per_capture(files: list[RawFile], columns: list, schemas: dict) -> s
     )
 
 
-def _latest_file_per_capture(files: list[RawFile], columns: list, schemas: dict) -> str:
-    """All rows of a capture come from the most recently uploaded file that contains it."""
+def _latest_file_per_capture(files: list[RawFile], columns: list, schemas: dict, item: str) -> str:
+    """All rows of a capture come from the most recently uploaded file that contains it; one
+    row per (capture_id, `item`)."""
     if not files:
         return _empty(columns)
     ranked = (
@@ -253,8 +289,29 @@ def _latest_file_per_capture(files: list[RawFile], columns: list, schemas: dict)
     )
     return (
         f"SELECT * EXCLUDE (file_rank) FROM ({ranked}) WHERE file_rank = 1 "
-        f"QUALIFY row_number() OVER (PARTITION BY capture_id, mat_index ORDER BY source_key) = 1"
+        f"QUALIFY row_number() OVER (PARTITION BY capture_id, {_q(item)} ORDER BY source_key) = 1"
     )
+
+
+def _positions(files: list[RawFile], schemas: dict) -> str:
+    """The newest position of every scan in `scans`, with `is_local` on its local zone: the last
+    line above the first SolarSystem/Root line, or the top line when that line is one of them
+    (the rule of ScanLake Desktop's Position.local_zone)."""
+    latest = _latest_file_per_capture(files, POSITION_COLUMNS, schemas, "zone_index")
+    is_system = " OR ".join(f"starts_with(zone, '{z}')" for z in SYSTEM_ZONES)
+    marked = (
+        f"SELECT *, min(CASE WHEN {is_system} THEN zone_index END) "
+        f"OVER (PARTITION BY capture_id) AS first_system "
+        f"FROM ({latest}) WHERE zone_index IS NOT NULL "
+        f"AND capture_id IN (SELECT capture_id FROM scans)"
+    )
+    local = (
+        "coalesce(max(CASE WHEN first_system IS NULL OR zone_index < first_system "
+        "THEN zone_index END) OVER (PARTITION BY capture_id), "
+        "min(zone_index) OVER (PARTITION BY capture_id))"
+    )
+    columns = ", ".join(_q(name) for name, _ in POSITION_COLUMNS + LINEAGE_COLUMNS)
+    return f"SELECT {columns}, zone_index = {local} AS is_local FROM ({marked})"
 
 
 def _normalise_names(con: duckdb.DuckDBPyConnection) -> None:

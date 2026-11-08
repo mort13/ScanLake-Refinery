@@ -1,9 +1,9 @@
 """Export consolidated tables and results to parquet and upload changed files via the Gateway.
 
 Layout in out/ and in the derived bucket:
-    consolidated/{scans,compositions,confidences}.parquet
+    consolidated/{scans,compositions,confidences,positions}.parquet
     results/<job>.parquet
-    monthly/YYYY/MM/<userId>/{scans,compositions,confidences}.parquet
+    monthly/YYYY/MM/<userId>/{scans,compositions,confidences,positions}.parquet
                          (closed months only: one file per raw month folder, user and table)
     manifest.json        (written last, so readers never see a manifest ahead of its files)
 """
@@ -31,6 +31,7 @@ CONSOLIDATED = {
     "scans": "capture_id",
     "compositions": "capture_id, mat_index",
     "confidences": "capture_id",
+    "positions": "capture_id, zone_index",
 }
 MANIFEST_KEY = "manifest.json"
 _SAFE_SEGMENT_RE = re.compile(rf"^{SEGMENT}$")

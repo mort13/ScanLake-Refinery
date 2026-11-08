@@ -44,6 +44,7 @@ def test_run_end_to_end(env, gateway, capsys):
     assert [k for k in derived if not k.startswith(("results/", "monthly/"))] == [
         "consolidated/compositions.parquet",
         "consolidated/confidences.parquet",
+        "consolidated/positions.parquet",  # empty: the fixtures hold no positions
         "consolidated/scans.parquet",
         "manifest.json",
     ]
