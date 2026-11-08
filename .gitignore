@@ -18,3 +18,6 @@ id_rsa*
 id_ed25519*
 id_ecdsa*
 rclone.conf
+
+# Wrangler's local cache (holds the Cloudflare account ID and name)
+.wrangler/
