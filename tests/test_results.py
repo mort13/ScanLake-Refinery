@@ -254,3 +254,41 @@ def test_highscores_list_each_users_best(results):
         ("most_scans_total", 1, "Doc", 59.0, None, None, None),
         ("most_scans_total", 2, "mort13", 7.0, None, None, None),
     ]
+
+
+def test_members_of_a_shared_session_are_timed_separately(con, tmp_path):
+    """One session id, two users scanning in turns: each one's gaps and cluster changes are
+    their own. Mixed together, every gap would be 15 s and every scan a new cluster."""
+    start = datetime(2026, 7, 1, 10)
+    shared = [
+        # Mort: 30 scans every 30 s, all in one cluster.
+        *[scan(f"m{i}", "sx", MORT, start, 30 * i, CLIO, "Copper", 100, "cm") for i in range(30)],
+        # Doc: 30 scans every 30 s, 15 s after Mort's, in clusters of two rocks.
+        *[
+            scan(f"d{i}", "sx", DOC, start, 30 * i + 15, CLIO, "Copper", 200, f"cd{i // 2}")
+            for i in range(30)
+        ],
+    ]
+    consolidate(con, tmp_path / "empty")
+    con.executemany(
+        'INSERT INTO scans (capture_id, cluster_id, session_id, user_id, user_name, "timestamp", '
+        "system, gravity_well, region, deposit, mass) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        shared,
+    )
+    jobs.compute(con)
+
+    assert rows(
+        con,
+        "SELECT user_name, sessions, scans, most_scans_in_session, best_session_avg_gap_seconds, "
+        "avg_gap_seconds FROM results_user_stats ORDER BY user_name",
+    ) == [("Doc", 1, 30, 30, 30.0, 30.0), ("Mort13", 1, 30, 30, 30.0, 30.0)]
+    assert rows(
+        con,
+        "SELECT user_name, value, detail FROM results_highscores "
+        "WHERE category = 'fastest_session_avg_scan_time' ORDER BY user_name",
+    ) == [("Doc", 30.0, "30 scans"), ("Mort13", 30.0, "30 scans")]
+    # The location still counts it as one session, with every member's own gaps
+    assert rows(
+        con,
+        "SELECT scans, sessions, users, gaps_counted, avg_gap_seconds FROM results_location_stats",
+    ) == [(60, 1, 2, 58, 30.0)]

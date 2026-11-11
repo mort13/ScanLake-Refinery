@@ -1,7 +1,9 @@
 """SQL building blocks shared by the result jobs. Not a job itself.
 
 Timestamps are the moment a scan was saved in Capture, so "scan time" is the time between two
-saves of the same session. A gap longer than PAUSE_SECONDS counts as a break and is left out.
+saves of the same user in the same session. A gap longer than PAUSE_SECONDS counts as a break
+and is left out. Several users can share one session id (a shared session in ScanLake
+Desktop): each one's scans are a sequence of their own, never mixed with the others'.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ USER_NAME = "arg_max(coalesce(nullif(trim(user_name), ''), user_id), \"timestamp
 
 
 def scan_gaps(keys: list[str]) -> str:
-    """Every scan plus `user_key`, `gap_seconds` since the previous scan of its session,
+    """Every scan plus `user_key`, `gap_seconds` since its user's previous scan of the session,
     `counted` (the gap is no pause), `same_location` (the previous scan had the same `keys`) and
     `new_cluster` (the previous scan was in another cluster)."""
     same = " AND ".join(f"{k} IS NOT DISTINCT FROM lag({k}) OVER w" for k in keys)
@@ -34,7 +36,7 @@ def scan_gaps(keys: list[str]) -> str:
                 {same} AS same_location,
                 cluster_id IS DISTINCT FROM lag(cluster_id) OVER w AS new_cluster
             FROM scans
-            WINDOW w AS (PARTITION BY session_id ORDER BY "timestamp", capture_id)
+            WINDOW w AS (PARTITION BY session_id, user_id ORDER BY "timestamp", capture_id)
         )
     """
 
